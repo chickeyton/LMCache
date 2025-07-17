@@ -372,10 +372,10 @@ class LookupRetMsg(OrchRetMsg):
 class FullLookupRetMsg(OrchRetMsg):
     """Full lookup return message"""
 
-    # matched_infos: list[Tuple[instance_id, Tuple[location, end]]]
-    matched_infos: list[Tuple[str, Tuple[str, int]]]
+    # matched_info: list[Tuple[instance_id, list[Tuple[location, end]]]
+    matched_info: list[Tuple[str, list[Tuple[str, int]]]]
     def describe(self) -> str:
-        return f"The full layout info is {self.matched_infos}"
+        return f"The full layout info is {self.matched_info}"
 
 
 class ClearRetMsg(OrchRetMsg):

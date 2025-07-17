@@ -175,9 +175,10 @@ class KVController:
             layout_info[matched_instance] = (matched_location, end)
         return LookupRetMsg(layout_info=layout_info)
     
-    async def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
+    def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
         tokens = msg.tokens
-        layout_infos = {}
+        layout_info = {}
+        is_first = True # ensure the prefix cache is complete
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
@@ -187,10 +188,11 @@ class KVController:
             for instance in self.kv_pool[key]:
                 matched_instance = instance.instance_id
                 matched_location = instance.location
-                layout_infos[matched_instance] = (matched_location, end)
-        matched_infos = sorted(
-            layout_infos.items(),
-            key=lambda x: (x[1][1]),  # Sort by end location
-            reverse=True,  # Reverse to get the longest prefix first
-        )
-        return FullLookupRetMsg(matched_infos=matched_infos)
+                if is_first:
+                    layout_info[matched_instance] = [(matched_location, end)]
+                else:
+                    if matched_instance in layout_info:  # ensure continuous prefix
+                        layout_info[matched_instance].append((matched_location, end))
+            is_first = False
+        matched_info = list(layout_info.items())
+        return FullLookupRetMsg(matched_info=matched_info)
