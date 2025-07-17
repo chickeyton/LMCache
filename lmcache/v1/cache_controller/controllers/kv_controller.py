@@ -175,7 +175,7 @@ class KVController:
             layout_info[matched_instance] = (matched_location, end)
         return LookupRetMsg(layout_info=layout_info)
     
-    def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
+    async def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
         tokens = msg.tokens
         layout_info = {}
         last_end = -1
