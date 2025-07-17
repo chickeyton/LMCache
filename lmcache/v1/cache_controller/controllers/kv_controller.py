@@ -178,21 +178,22 @@ class KVController:
     def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
         tokens = msg.tokens
         layout_info = {}
-        is_first = True # ensure the prefix cache is complete
+        last_end = -1
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
             assert isinstance(key, str)
-            if key not in self.kv_pool:
+            matched_pool = self.kv_pool.get(key, None)
+            if matched_pool is None:
                 break
-            for instance in self.kv_pool[key]:
+            for instance in matched_pool:
                 matched_instance = instance.instance_id
                 matched_location = instance.location
-                if is_first:
+                if last_end == -1:
                     layout_info[matched_instance] = [(matched_location, end)]
                 else:
-                    if matched_instance in layout_info:  # ensure continuous prefix
-                        layout_info[matched_instance].append((matched_location, end))
-            is_first = False
-        matched_info = list(layout_info.items())
-        return FullLookupRetMsg(matched_info=matched_info)
+                    cache_list = layout_info.get(matched_instance, None)
+                    if cache_list is not None and last_end == cache_list[-1][1]:
+                        cache_list.append((matched_location, end))
+            last_end = end
+        return FullLookupRetMsg(matched_info=list(layout_info.items()), chunk_size=self.token_database.chunk_size)

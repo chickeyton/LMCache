@@ -374,6 +374,8 @@ class FullLookupRetMsg(OrchRetMsg):
 
     # matched_info: list[Tuple[instance_id, list[Tuple[location, end]]]
     matched_info: list[Tuple[str, list[Tuple[str, int]]]]
+    chunk_size: int
+
     def describe(self) -> str:
         return f"The full layout info is {self.matched_info}"
 
