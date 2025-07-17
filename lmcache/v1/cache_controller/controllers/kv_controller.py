@@ -26,7 +26,9 @@ from lmcache.v1.cache_controller.message import (
     KVAdmitMsg,
     KVEvictMsg,
     LookupMsg,
+    FullLookupMsg,
     LookupRetMsg,
+    FullLookupRetMsg,
     MoveMsg,
     MoveRetMsg,
     PinMsg,
@@ -172,3 +174,26 @@ class KVController:
             matched_location = self.kv_pool[key][0].location
             layout_info[matched_instance] = (matched_location, end)
         return LookupRetMsg(layout_info=layout_info)
+    
+    def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
+        tokens = msg.tokens
+        layout_info = {}
+        last_end = -1
+        for start, end, key in self.token_database.process_tokens(
+            tokens, make_key=False
+        ):
+            assert isinstance(key, str)
+            matched_pool = self.kv_pool.get(key, None)
+            if matched_pool is None:
+                break
+            for instance in matched_pool:
+                matched_instance = instance.instance_id
+                matched_location = instance.location
+                if last_end == -1:
+                    layout_info[matched_instance] = [(matched_location, end)]
+                else:
+                    cache_list = layout_info.get(matched_instance, None)
+                    if cache_list is not None and last_end == cache_list[-1][1]:
+                        cache_list.append((matched_location, end))
+            last_end = end
+        return FullLookupRetMsg(matched_info=list(layout_info.items()), chunk_size=self.token_database.chunk_size)

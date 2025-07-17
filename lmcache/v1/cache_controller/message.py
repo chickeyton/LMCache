@@ -259,6 +259,13 @@ class LookupMsg(OrchMsg):
     def describe(self) -> str:
         return f"Lookup tokens {self.tokens}"
 
+class FullLookupMsg(OrchMsg):
+    """Full lookup message"""
+
+    tokens: list[int]
+
+    def describe(self) -> str:
+        return f"Full lookup tokens {self.tokens}"
 
 class ClearMsg(OrchMsg):
     """Clear message"""
@@ -361,6 +368,16 @@ class LookupRetMsg(OrchRetMsg):
 
     def describe(self) -> str:
         return f"The layout info is {self.layout_info}"
+    
+class FullLookupRetMsg(OrchRetMsg):
+    """Full lookup return message"""
+
+    # matched_info: list[Tuple[instance_id, list[Tuple[location, end]]]
+    matched_info: list[Tuple[str, list[Tuple[str, int]]]]
+    chunk_size: int
+
+    def describe(self) -> str:
+        return f"The full layout info is {self.matched_info}"
 
 
 class ClearRetMsg(OrchRetMsg):
