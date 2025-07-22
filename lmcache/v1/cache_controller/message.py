@@ -78,7 +78,7 @@ class KVAdmitMsg(WorkerMsg):
 
     instance_id: str
     worker_id: int
-    key: str
+    key: int
     location: str
 
     def describe(self) -> str:
@@ -90,7 +90,7 @@ class KVEvictMsg(WorkerMsg):
 
     instance_id: str
     worker_id: int
-    key: str
+    key: int
     location: str
 
     def describe(self) -> str:

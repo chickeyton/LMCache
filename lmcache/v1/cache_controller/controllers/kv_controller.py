@@ -59,11 +59,12 @@ class KVController:
         # redis. We might need a local cache for handling
         # messages like `check_finish`. Or everything should be
         # written to redis.
-        self.kv_pool: dict[str, list[KVChunkMetadata]] = {}
+        self.kv_pool: dict[int, list[KVChunkMetadata]] = {}
 
         # TODO(Jiayi): remove this hardcode
         self.token_database = ChunkedTokenDatabase()
         self.token_database.chunk_size = 256
+        self.token_database.save_unfull_chunk = True
 
     def post_init(self, cluster_executor):
         """
@@ -167,7 +168,7 @@ class KVController:
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
-            assert isinstance(key, str)
+            assert isinstance(key, int)
             if key not in self.kv_pool:
                 break
             matched_instance = self.kv_pool[key][0].instance_id
@@ -182,7 +183,7 @@ class KVController:
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
-            assert isinstance(key, str)
+            assert isinstance(key, int)
             matched_pool = self.kv_pool.get(key, None)
             if matched_pool is None:
                 break
