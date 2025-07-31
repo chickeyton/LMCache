@@ -64,8 +64,19 @@ class LocalCPUBackend(StorageBackendInterface):
         self.layerwise = config.use_layerwise
         self.enable_blending = config.enable_blending
 
+        # Callback functions for lookup server management
+        self.on_eviction_callback = None
+
     def __str__(self):
         return self.__class__.__name__
+
+    def set_callbacks(self, on_eviction=None):
+        """
+        Set callback function for lookup server management.
+        
+        :param on_eviction: Callback function called when keys are evicted
+        """
+        self.on_eviction_callback = on_eviction
 
     def contains(self, key: CacheEngineKey, pin: bool = False) -> bool:
         with self.cpu_lock:
@@ -250,8 +261,8 @@ class LocalCPUBackend(StorageBackendInterface):
             # already freed above in order to allocate new memory object
             # this is to remove the key from the hot cache
             self.remove(evict_key, free_obj=False)
-        if self.lookup_server is not None:
-            self.lookup_server.batched_remove(evict_keys)
+        if self.on_eviction_callback is not None:
+            self.on_eviction_callback(evict_keys, "LocalCPUBackend")
         return memory_obj
 
     @_lmcache_nvtx_annotate
@@ -332,8 +343,8 @@ class LocalCPUBackend(StorageBackendInterface):
             # already freed above in order to allocate new memory objects
             # this is to remove the key from the hot cache
             self.remove(evict_key, free_obj=False)
-        if self.lookup_server is not None:
-            self.lookup_server.batched_remove(evict_keys)
+        if self.on_eviction_callback is not None:
+            self.on_eviction_callback(evict_keys, "LocalCPUBackend")
         return memory_objs
 
     def get_keys(self) -> List[CacheEngineKey]:
@@ -360,8 +371,8 @@ class LocalCPUBackend(StorageBackendInterface):
         for key in clear_keys:
             self.remove(key)
 
-        if self.lookup_server is not None:
-            self.lookup_server.batched_remove(clear_keys)
+        if self.on_eviction_callback is not None:
+            self.on_eviction_callback(clear_keys, "LocalCPUBackend")
 
         return len(clear_keys)
 

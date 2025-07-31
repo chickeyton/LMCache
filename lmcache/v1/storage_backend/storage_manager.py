@@ -87,6 +87,21 @@ class StorageManager:
 
         self.nixl_offload_stream = torch.cuda.Stream()
 
+        # Set up callback functions for backends
+        if self.lookup_server is not None:
+            self._setup_backend_callbacks()
+
+    def _setup_backend_callbacks(self) -> None:
+        """
+        Set up callback functions for backends that need lookup server management.
+        This avoids direct dependencies between backends and storage_manager.
+        """
+        for backend_name, backend in self.storage_backends.items():
+            if hasattr(backend, 'set_callbacks'):
+                backend.set_callbacks(
+                    on_eviction=self._remove_from_lookup_server,
+                )
+
     @_lmcache_nvtx_annotate
     def allocate(
         self,
@@ -197,6 +212,9 @@ class StorageManager:
             # NOTE: the handling of exists_in_put_tasks
             # is done in the backend
             backend.batched_submit_put_task(keys, memory_objs)
+
+        if self.lookup_server is not None:
+            self.lookup_server.batched_insert(keys)
 
         for memory_obj in memory_objs:
             memory_obj.ref_count_down()
@@ -413,3 +431,22 @@ class StorageManager:
             self.thread.join()
 
         logger.info("Storage manager closed.")
+
+    def _remove_from_lookup_server(self, keys: Sequence[CacheEngineKey], from_backend: str) -> None:
+        """
+        remove keys from lookup server only if they exist.
+        """
+        if self.lookup_server is None:
+            return
+
+        search_range = ["LocalCPUBackend", "LocalDiskBackend"]
+        if from_backend in search_range:
+            search_range.remove(from_backend)
+        
+        keys_to_remove = []
+        for key in keys:
+            if not self.contains(key, search_range=search_range):
+                keys_to_remove.append(key)
+        
+        if keys_to_remove:
+            self.lookup_server.batched_remove(keys_to_remove)
