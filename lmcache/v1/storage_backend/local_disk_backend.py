@@ -297,7 +297,7 @@ class LocalDiskBackend(StorageBackendInterface):
         # evict caches
         for evict_key in evict_keys:
             self.remove(evict_key)
-        self._listener.on_evict(self, evict_keys)
+        super()._on_evict(evict_keys)
 
         memory_obj.ref_count_up()
 
@@ -526,5 +526,5 @@ class LocalDiskBackend(StorageBackendInterface):
 
     def close(self) -> None:
         self.disk_lock.acquire()
-        self._listener.on_evict(self, list(self.dict.keys()))
+        super()._on_evict(list(self.dict.keys()))
         self.disk_lock.release()

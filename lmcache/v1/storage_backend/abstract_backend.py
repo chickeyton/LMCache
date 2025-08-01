@@ -40,6 +40,13 @@ class StorageBackendInterface(metaclass=abc.ABCMeta):
         """
         self._listener = listener
 
+    def _on_evict(self, keys: List[CacheEngineKey]) -> None:
+        """
+        Evict keys from the storage backend.
+        """
+        if self._listener is not None:
+            self._listener.on_evict(self, keys)
+
     @abc.abstractmethod
     def contains(self, key: CacheEngineKey, pin: bool = False) -> bool:
         """
