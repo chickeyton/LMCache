@@ -252,7 +252,7 @@ class LocalCPUBackend(StorageBackendInterface):
             # already freed above in order to allocate new memory object
             # this is to remove the key from the hot cache
             self.remove(evict_key, free_obj=False)
-        self._listener.on_evict(self, evict_keys)
+        super()._on_evict(evict_keys)
         return memory_obj
 
     @_lmcache_nvtx_annotate
@@ -333,7 +333,7 @@ class LocalCPUBackend(StorageBackendInterface):
             # already freed above in order to allocate new memory objects
             # this is to remove the key from the hot cache
             self.remove(evict_key, free_obj=False)
-        self._listener.on_evict(self, evict_keys)
+        super()._on_evict(evict_keys)
         return memory_objs
 
     def get_keys(self) -> List[CacheEngineKey]:
@@ -360,7 +360,7 @@ class LocalCPUBackend(StorageBackendInterface):
         for key in clear_keys:
             self.remove(key)
 
-        self._listener.on_evict(self, clear_keys)
+        super()._on_evict(clear_keys)
 
         return len(clear_keys)
 
