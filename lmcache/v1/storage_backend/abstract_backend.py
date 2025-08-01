@@ -10,6 +10,7 @@ import torch
 # First Party
 from lmcache.utils import CacheEngineKey
 from lmcache.v1.memory_management import MemoryObj
+from lmcache.v1.storage_backend.storage_backend_listener import StorageBackendListener
 
 
 class StorageBackendInterface(metaclass=abc.ABCMeta):
@@ -31,6 +32,13 @@ class StorageBackendInterface(metaclass=abc.ABCMeta):
             raise
 
         self.dst_device = dst_device
+        self._listener: Optional[StorageBackendListener] = None
+
+    def set_listener(self, listener: StorageBackendListener):
+        """
+        Set the listener to receive events.
+        """
+        self._listener = listener
 
     @abc.abstractmethod
     def contains(self, key: CacheEngineKey, pin: bool = False) -> bool:

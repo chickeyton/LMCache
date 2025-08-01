@@ -193,19 +193,8 @@ class LocalDiskBackend(StorageBackendInterface):
         self.stats_monitor = LMCStatsMonitor.GetOrCreate()
         self.usage = 0
 
-        # Callback function for lookup server management
-        self.on_eviction_callback = None
-
     def __str__(self):
         return "LocalDiskBackend"
-
-    def set_callbacks(self, on_eviction=None):
-        """
-        Set callback function for lookup server management.
-        
-        :param on_eviction: Callback function called when keys are evicted
-        """
-        self.on_eviction_callback = on_eviction
 
     def _key_to_path(
         self,
@@ -308,8 +297,7 @@ class LocalDiskBackend(StorageBackendInterface):
         # evict caches
         for evict_key in evict_keys:
             self.remove(evict_key)
-        if self.on_eviction_callback is not None:
-            self.on_eviction_callback(evict_keys, "LocalDiskBackend")
+        self._listener.on_evict(self, evict_keys)
 
         memory_obj.ref_count_up()
 
@@ -537,7 +525,6 @@ class LocalDiskBackend(StorageBackendInterface):
         return memory_obj
 
     def close(self) -> None:
-        if self.on_eviction_callback is not None:
-            self.disk_lock.acquire()
-            self.on_eviction_callback(list(self.dict.keys()), "LocalDiskBackend")
-            self.disk_lock.release()
+        self.disk_lock.acquire()
+        self._listener.on_evict(self, list(self.dict.keys()))
+        self.disk_lock.release()

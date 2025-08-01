@@ -29,6 +29,7 @@ from lmcache.v1.memory_management import (
 from lmcache.v1.storage_backend import CreateStorageBackends
 from lmcache.v1.storage_backend.abstract_backend import StorageBackendInterface
 from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
+from lmcache.v1.storage_backend.storage_backend_listener import StorageBackendListener
 
 if TYPE_CHECKING:
     # First Party
@@ -38,7 +39,7 @@ logger = init_logger(__name__)
 
 
 # TODO: extend this class to implement caching policies and eviction policies
-class StorageManager:
+class StorageManager(StorageBackendListener):
     """
     The StorageManager is responsible for managing the storage backends.
     """
@@ -87,20 +88,11 @@ class StorageManager:
 
         self.nixl_offload_stream = torch.cuda.Stream()
 
-        # Set up callback functions for backends
-        if self.lookup_server is not None:
-            self._setup_backend_callbacks()
+        self._setup_backend_listener()
 
-    def _setup_backend_callbacks(self) -> None:
-        """
-        Set up callback functions for backends that need lookup server management.
-        This avoids direct dependencies between backends and storage_manager.
-        """
+    def _setup_backend_listener(self) -> None:
         for backend_name, backend in self.storage_backends.items():
-            if hasattr(backend, 'set_callbacks'):
-                backend.set_callbacks(
-                    on_eviction=self._remove_from_lookup_server,
-                )
+            backend.set_listener(self)
 
     @_lmcache_nvtx_annotate
     def allocate(
@@ -432,16 +424,19 @@ class StorageManager:
 
         logger.info("Storage manager closed.")
 
-    def _remove_from_lookup_server(self, keys: Sequence[CacheEngineKey], from_backend: str) -> None:
+    def on_evict(self, backend: StorageBackendInterface, keys: List[CacheEngineKey]):
         """
-        remove keys from lookup server only if they exist.
+        remove keys from lookup server only if they don't exist in local backends.
+        
+        :param StorageBackendInterface backend: The backend that evicted the keys.
+        :param List[CacheEngineKey] keys: The keys that were evicted.
         """
         if self.lookup_server is None:
             return
 
         search_range = ["LocalCPUBackend", "LocalDiskBackend"]
-        if from_backend in search_range:
-            search_range.remove(from_backend)
+        if str(backend) in search_range:
+            search_range.remove(str(backend))
         
         keys_to_remove = []
         for key in keys:
