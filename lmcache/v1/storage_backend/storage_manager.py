@@ -29,6 +29,7 @@ from lmcache.v1.memory_management import (
 from lmcache.v1.storage_backend import CreateStorageBackends
 from lmcache.v1.storage_backend.abstract_backend import StorageBackendInterface
 from lmcache.v1.storage_backend.local_cpu_backend import LocalCPUBackend
+from lmcache.v1.storage_backend.storage_backend_listener import StorageBackendListener
 
 if TYPE_CHECKING:
     # First Party
@@ -38,7 +39,7 @@ logger = init_logger(__name__)
 
 
 # TODO: extend this class to implement caching policies and eviction policies
-class StorageManager:
+class StorageManager(StorageBackendListener):
     """
     The StorageManager is responsible for managing the storage backends.
     """
@@ -86,6 +87,12 @@ class StorageManager:
         self.worker_id = metadata.worker_id
 
         self.nixl_offload_stream = torch.cuda.Stream()
+
+        self._setup_backend_listener()
+
+    def _setup_backend_listener(self) -> None:
+        for backend_name, backend in self.storage_backends.items():
+            backend.set_listener(self)
 
     @_lmcache_nvtx_annotate
     def allocate(
@@ -197,6 +204,9 @@ class StorageManager:
             # NOTE: the handling of exists_in_put_tasks
             # is done in the backend
             backend.batched_submit_put_task(keys, memory_objs)
+
+        if self.lookup_server is not None:
+            self.lookup_server.batched_insert(keys)
 
         for memory_obj in memory_objs:
             memory_obj.ref_count_down()
@@ -413,3 +423,25 @@ class StorageManager:
             self.thread.join()
 
         logger.info("Storage manager closed.")
+
+    def on_evict(self, backend: StorageBackendInterface, keys: List[CacheEngineKey]):
+        """
+        remove keys from lookup server only if they don't exist in local backends.
+        
+        :param StorageBackendInterface backend: The backend that evicted the keys.
+        :param List[CacheEngineKey] keys: The keys that were evicted.
+        """
+        if self.lookup_server is None:
+            return
+
+        search_range = ["LocalCPUBackend", "LocalDiskBackend"]
+        if str(backend) in search_range:
+            search_range.remove(str(backend))
+        
+        keys_to_remove = []
+        for key in keys:
+            if not self.contains(key, search_range=search_range):
+                keys_to_remove.append(key)
+        
+        if keys_to_remove:
+            self.lookup_server.batched_remove(keys_to_remove)
