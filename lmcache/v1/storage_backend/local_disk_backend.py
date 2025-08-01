@@ -525,6 +525,6 @@ class LocalDiskBackend(StorageBackendInterface):
         return memory_obj
 
     def close(self) -> None:
-        self.disk_lock.acquire()
-        super()._on_evict(list(self.dict.keys()))
-        self.disk_lock.release()
+        with self.disk_lock:
+            keys = list(self.dict.keys())
+        super()._on_evict(keys)
