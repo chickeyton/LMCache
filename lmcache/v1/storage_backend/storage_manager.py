@@ -68,6 +68,8 @@ class StorageManager(StorageBackendListener):
                 lookup_server,
             )
         )
+        for backend in self.storage_backends.values():
+            backend.set_listener(self)
 
         self.enable_nixl = config.enable_nixl
 
@@ -87,12 +89,6 @@ class StorageManager(StorageBackendListener):
         self.worker_id = metadata.worker_id
 
         self.nixl_offload_stream = torch.cuda.Stream()
-
-        self._setup_backend_listener()
-
-    def _setup_backend_listener(self) -> None:
-        for backend_name, backend in self.storage_backends.items():
-            backend.set_listener(self)
 
     @_lmcache_nvtx_annotate
     def allocate(

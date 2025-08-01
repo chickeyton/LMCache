@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: Apache-2.0
+# Standard
 from enum import Enum
 from typing import List, TYPE_CHECKING
 import abc
@@ -9,12 +11,6 @@ if TYPE_CHECKING:
 
 
 class StorageBackendListener(metaclass=abc.ABCMeta):
-    @abc.abstractmethod
-    def _setup_backend_listener(self) -> None:
-        """
-        Set up listener for all backends.
-        """
-        raise NotImplementedError
-
+    """Listener for events happen inside storage backend."""
     def on_evict(self, backend: "StorageBackendInterface", keys: List[CacheEngineKey]):
         pass
