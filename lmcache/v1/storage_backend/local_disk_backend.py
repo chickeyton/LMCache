@@ -315,8 +315,7 @@ class LocalDiskBackend(StorageBackendInterface):
         # evict caches
         for evict_key in evict_keys:
             self.remove(evict_key)
-        if self.lookup_server is not None:
-            self.lookup_server.batched_remove(evict_keys)
+        super()._on_evict(evict_keys)
 
         memory_obj.ref_count_up()
 
@@ -422,8 +421,8 @@ class LocalDiskBackend(StorageBackendInterface):
         assert dtype is not None
         assert shape is not None
 
-        memory_obj = self.load_bytes_from_disk(path, dtype=dtype, shape=shape, fmt=fmt)
         self.disk_lock.release()
+        memory_obj = self.load_bytes_from_disk(path, dtype=dtype, shape=shape, fmt=fmt)
 
         return memory_obj
 
@@ -571,7 +570,6 @@ class LocalDiskBackend(StorageBackendInterface):
         return memory_obj
 
     def close(self) -> None:
-        if self.lookup_server is not None:
-            self.disk_lock.acquire()
-            self.lookup_server.batched_remove(list(self.dict.keys()))
-            self.disk_lock.release()
+        with self.disk_lock:
+            keys = list(self.dict.keys())
+        super()._on_evict(keys)
