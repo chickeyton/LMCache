@@ -125,11 +125,11 @@ class StorageManager(StorageBackendListener):
             shape, dtype, batch_size, fmt, eviction=eviction
         )
 
-    # FIXME: Should be deprecated
     def put(
         self,
         key: CacheEngineKey,
         memory_obj: MemoryObj,
+        location: Optional[str] = None,
     ) -> None:
         """
         Non-blocking function to put the memory object into the storages.
@@ -138,15 +138,19 @@ class StorageManager(StorageBackendListener):
         """
 
         for backend_name, backend in self.storage_backends.items():
+            if location and backend_name != location:
+                continue
             backend.submit_put_task(key, memory_obj)
 
         memory_obj.ref_count_down()
 
+    # TODO(Jiayi): location and transfer_spec might be redundant
     def batched_put(
         self,
         keys: Sequence[CacheEngineKey],
         memory_objs: List[MemoryObj],
         transfer_spec=None,  # TODO(Jiayi): add type check
+        location: Optional[str] = None,
     ) -> None:
         """
         Non-blocking function to batched put the memory objects into the
@@ -155,12 +159,7 @@ class StorageManager(StorageBackendListener):
         storage manager) or has been stored (handled by storage backend).
         """
 
-        # TODO(Jiayi): currently, the cache is stored to a certain
-        # backend if this backend does not have this cache.
-        # There's no way to configure a global caching policy
-        # among different storage backends.
-
-        if self.enable_nixl:
+        if self.enable_nixl or (location and location == "NixlBackend"):
             self.allocator_backend.batched_submit_put_task(
                 keys, memory_objs, transfer_spec=transfer_spec
             )
@@ -197,6 +196,8 @@ class StorageManager(StorageBackendListener):
         for backend_name, backend in self.storage_backends.items():
             if backend_name == "NixlBackend":
                 continue
+            if location and backend_name != location:
+                continue
             # NOTE: the handling of exists_in_put_tasks
             # is done in the backend
             backend.batched_submit_put_task(keys, memory_objs)
@@ -207,17 +208,23 @@ class StorageManager(StorageBackendListener):
         for memory_obj in memory_objs:
             memory_obj.ref_count_down()
 
-    def get(self, key: CacheEngineKey) -> Optional[MemoryObj]:
+    def get(
+        self,
+        key: CacheEngineKey,
+        location: Optional[str] = None,
+    ) -> Optional[MemoryObj]:
         """
         Blocking function to get the memory object from the storages.
         """
 
         # Search all backends for blocking get
         for backend_name, backend in self.storage_backends.items():
+            if location and backend_name != location:
+                continue
             # TODO(Jiayi): need to make sure all memory_objs returned
             # are allocated by the allocator backend.
             memory_obj = backend.get_blocking(key)
-            if memory_obj is not None:
+            if memory_obj:
                 if backend_name not in ["LocalCPUBackend", "NixlBackend"]:
                     local_cpu_backend = self.storage_backends["LocalCPUBackend"]
                     assert isinstance(local_cpu_backend, LocalCPUBackend)
@@ -226,7 +233,11 @@ class StorageManager(StorageBackendListener):
 
         return None
 
-    def get_non_blocking(self, key: CacheEngineKey) -> Optional[Future]:
+    def get_non_blocking(
+        self,
+        key: CacheEngineKey,
+        location: Optional[str] = None,
+    ) -> Optional[Future]:
         """
         Non-blocking function to get the memory object from the storages.
         """
@@ -234,9 +245,11 @@ class StorageManager(StorageBackendListener):
 
         # Search all backends for non-blocking get
         for backend_name, backend in self.storage_backends.items():
+            if location and backend_name != location:
+                continue
             # NOTE(Jiayi): bypass the allocator for now
             task = backend.get_non_blocking(key)
-            if task is not None:
+            if task:
                 # TODO (Jiayi): add write-back logic here
                 return task
         return None
@@ -244,18 +257,23 @@ class StorageManager(StorageBackendListener):
     def batched_get(
         self,
         keys: List[CacheEngineKey],
-        storage_backend_name: str,
-    ) -> List[MemoryObj]:
+        location: Optional[str] = None,
+    ) -> Optional[List[MemoryObj]]:
         """
         Blocking function to get the memory objects from the storages.
         """
-        storage_backend = self.storage_backends[storage_backend_name]
-        memory_objs = storage_backend.batched_get_blocking(keys)
-        return memory_objs
+        for backend_name, storage_backend in self.storage_backends.items():
+            if location and backend_name != location:
+                continue
+            memory_objs = storage_backend.batched_get_blocking(keys)
+            if memory_objs:
+                return memory_objs
+        return None
 
     def layerwise_batched_get(
         self,
         keys: List[List[CacheEngineKey]],
+        location: Optional[str] = None,
     ) -> Generator[List[Future], None, None]:
         """
         Non-blocking function to get the memory objects into the storages
@@ -273,7 +291,7 @@ class StorageManager(StorageBackendListener):
             # Retrieve all chunks for one layer
             tasks = []
             for key in keys_multi_chunk:
-                task = self.get_non_blocking(key)
+                task = self.get_non_blocking(key, location)
                 assert task is not None
                 tasks.append(task)
             yield tasks
@@ -316,7 +334,7 @@ class StorageManager(StorageBackendListener):
         """
 
         for backend_name, backend in self.storage_backends.items():
-            if search_range is not None and backend_name not in search_range:
+            if search_range and backend_name not in search_range:
                 continue
 
             # NOTE(Jiayi): We do not pin for NixlBackend
@@ -327,6 +345,11 @@ class StorageManager(StorageBackendListener):
                 return backend_name
 
         return None
+
+    def touch_cache(self):
+        for backend_name, backend in self.storage_backends.items():
+            if backend_name == "LocalCPUBackend" or backend_name == "LocalDiskBackend":
+                backend.touch_cache()
 
     def remove(
         self,
@@ -351,9 +374,34 @@ class StorageManager(StorageBackendListener):
         num_removed = 0
         for backend_name, backend in self.storage_backends.items():
             # TODO(Jiayi): need to handle remove in non-cpu backends
-            if locations is None or "LocalCPUBackend" in locations:
-                assert hasattr(backend, "remove")
+            if locations is None or backend_name in locations:
                 num_removed += backend.remove(key)
+
+        return num_removed
+
+    def batched_remove(
+        self,
+        keys: List[CacheEngineKey],
+        locations: Optional[List[str]] = None,
+    ) -> int:
+        """
+        Batched remove the keys and the corresponding cache in the specified
+        locations.
+
+        :param List[CacheEngineKey] keys: The keys to remove.
+
+        :param Optional[List[str]] locations: The range of storage backends
+        to perform `remove` in.
+        Should be a subset of ["LocalCPUBackend", "LocalDiskBackend"] for now.
+        If None, perform `remove` in all backends.
+
+        return: Total number of removed caches in the specified
+        storage backends.
+        """
+        num_removed = 0
+        for backend_name, backend in self.storage_backends.items():
+            if locations is None or backend_name in locations:
+                num_removed += backend.batched_remove(keys)
 
         return num_removed
 
@@ -389,23 +437,23 @@ class StorageManager(StorageBackendListener):
         Should be a subset of ["LocalCPUBackend", "LocalDiskBackend"] for now.
         If None, perform `clear` in all backends.
 
-        return: Total number of cleared caches in the specified
+        return: Total number of cleared tokens in the specified
         storage backends.
         """
 
-        num_cleared = 0
+        num_cleared_tokens = 0
         for backend_name, backend in self.storage_backends.items():
             # TODO(Jiayi): need to handle remove in non-cpu backends
             if locations is None or backend_name in locations:
                 if hasattr(backend, "clear"):
-                    num_cleared += backend.clear()
+                    num_cleared_tokens += backend.clear()
                 else:
                     logger.warning(
                         f"Storage backend {backend_name} does not support "
                         "clear operation. Skipping."
                     )
 
-        return num_cleared
+        return num_cleared_tokens
 
     def close(self):
         for backend in self.storage_backends.values():
@@ -423,7 +471,7 @@ class StorageManager(StorageBackendListener):
     def on_evict(self, backend: StorageBackendInterface, keys: List[CacheEngineKey]):
         """
         remove keys from lookup server only if they don't exist in local backends.
-        
+
         :param StorageBackendInterface backend: The backend that evicted the keys.
         :param List[CacheEngineKey] keys: The keys that were evicted.
         """
@@ -433,11 +481,11 @@ class StorageManager(StorageBackendListener):
         search_range = ["LocalCPUBackend", "LocalDiskBackend"]
         if str(backend) in search_range:
             search_range.remove(str(backend))
-        
+
         keys_to_remove = []
         for key in keys:
             if not self.contains(key, search_range=search_range):
                 keys_to_remove.append(key)
-        
+
         if keys_to_remove:
             self.lookup_server.batched_remove(keys_to_remove)
