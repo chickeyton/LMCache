@@ -64,7 +64,6 @@ class LocalCPUBackend(StorageBackendInterface):
         self.layerwise = config.use_layerwise
         self.enable_blending = config.enable_blending
 
-
         # to help maintain suffix -> prefix order in the dict
         # assumption: only one request is looked up at a time
         # (only one worker per cache engine)
@@ -72,7 +71,6 @@ class LocalCPUBackend(StorageBackendInterface):
 
     def __str__(self):
         return self.__class__.__name__
-
 
     def contains(self, key: CacheEngineKey, pin: bool = False) -> bool:
         with self.cpu_lock:

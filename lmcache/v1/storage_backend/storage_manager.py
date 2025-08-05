@@ -471,7 +471,7 @@ class StorageManager(StorageBackendListener):
     def on_evict(self, backend: StorageBackendInterface, keys: List[CacheEngineKey]):
         """
         remove keys from lookup server only if they don't exist in local backends.
-        
+
         :param StorageBackendInterface backend: The backend that evicted the keys.
         :param List[CacheEngineKey] keys: The keys that were evicted.
         """
@@ -481,11 +481,11 @@ class StorageManager(StorageBackendListener):
         search_range = ["LocalCPUBackend", "LocalDiskBackend"]
         if str(backend) in search_range:
             search_range.remove(str(backend))
-        
+
         keys_to_remove = []
         for key in keys:
             if not self.contains(key, search_range=search_range):
                 keys_to_remove.append(key)
-        
+
         if keys_to_remove:
             self.lookup_server.batched_remove(keys_to_remove)
