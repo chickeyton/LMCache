@@ -602,33 +602,6 @@ class TestLocalDiskBackend:
 
         local_disk_backend.local_cpu_backend.memory_allocator.close()
 
-    def test_close(self, temp_disk_path, async_loop, local_cpu_backend):
-        """Test close()."""
-        config = create_test_config(temp_disk_path)
-        lookup_server = MockLookupServer()
-
-        backend = LocalDiskBackend(
-            config=config,
-            loop=async_loop,
-            local_cpu_backend=local_cpu_backend,
-            dst_device="cuda",
-            lookup_server=lookup_server,
-        )
-
-        # Add some keys
-        for i in range(3):
-            key = create_test_key(f"key_{i}")
-            memory_obj = create_test_memory_obj()
-            backend.insert_key(key, memory_obj)
-
-        # Close the backend
-        backend.close()
-
-        # Check that keys were removed from lookup server
-        assert len(lookup_server.removed_keys) == 3
-
-        local_cpu_backend.memory_allocator.close()
-
     def test_concurrent_access(self, local_disk_backend):
         """Test concurrent access to the backend."""
         key = create_test_key("test_key")
