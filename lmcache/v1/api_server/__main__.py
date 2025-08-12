@@ -21,6 +21,8 @@ from lmcache.v1.cache_controller.message import (  # noqa: E501
     ClearRetMsg,
     CompressMsg,
     CompressRetMsg,
+    FullLookupMsg,
+    FullLookupRetMsg,
     HealthMsg,
     HealthRetMsg,
     LookupMsg,
@@ -103,6 +105,32 @@ def create_app(controller_url: str) -> FastAPI:
             assert isinstance(ret_msg, LookupRetMsg)
             return LookupResponse(
                 event_id=ret_msg.event_id, layout_info=ret_msg.layout_info
+            )
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e)) from e
+
+    class FullLookupRequest(BaseModel):
+        tokens: List[int]
+
+    class FullLookupResponse(BaseModel):
+        event_id: str
+        matched_info: List[Tuple[str, List[Tuple[str, int]]]]
+        chunk_size: int
+
+    @app.post("/full_lookup", response_model=FullLookupResponse)
+    async def full_lookup(req: FullLookupRequest):
+        try:
+            event_id = "FullLookup" + str(uuid.uuid4())
+            msg = FullLookupMsg(
+                event_id=event_id,
+                tokens=req.tokens,
+            )
+            ret_msg = await lmcache_controller_manager.handle_orchestration_message(msg)
+            assert isinstance(ret_msg, FullLookupRetMsg)
+            return FullLookupResponse(
+                event_id=ret_msg.event_id,
+                matched_info=ret_msg.matched_info,
+                chunk_size=ret_msg.chunk_size,
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=str(e)) from e

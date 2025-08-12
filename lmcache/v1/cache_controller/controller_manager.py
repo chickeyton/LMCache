@@ -26,6 +26,7 @@ from lmcache.v1.cache_controller.message import (  # isort: skip
     KVAdmitMsg,
     KVEvictMsg,
     LookupMsg,
+    FullLookupMsg,
     MoveMsg,
     Msg,
     MsgBase,
@@ -104,6 +105,8 @@ class LMCacheControllerManager:
     async def handle_orchestration_message(self, msg: OrchMsg) -> Optional[OrchRetMsg]:
         if isinstance(msg, LookupMsg):
             return await self.kv_controller.lookup(msg)
+        elif isinstance(msg, FullLookupMsg):
+            return await self.kv_controller.full_lookup(msg)
         elif isinstance(msg, HealthMsg):
             return await self.reg_controller.health(msg)
         elif isinstance(msg, QueryInstMsg):
