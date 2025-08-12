@@ -1,8 +1,9 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard
 from collections import defaultdict
-from typing import Dict, Generator, List, Optional, Union
+from typing import Dict, Generator, List, Optional, Tuple, Union
 import asyncio
+import gc
 import multiprocessing
 import time
 
@@ -26,11 +27,12 @@ from lmcache.v1.gpu_connector import (
     VLLMPagedMemLayerwiseGPUConnector,
 )
 from lmcache.v1.lookup_server import LookupServerInterface, RedisLookupServer
-from lmcache.v1.memory_management import AdHocMemoryAllocator  # noqa: E501
 from lmcache.v1.memory_management import CuFileMemoryAllocator  # noqa: E501
-from lmcache.v1.memory_management import (
+from lmcache.v1.memory_management import (  # noqa: E501
+    AdHocMemoryAllocator,
     MemoryAllocatorInterface,
     MemoryFormat,
+    MemoryObj,
     MixedMemoryAllocator,
     NixlCPUMemoryAllocator,
 )
@@ -135,13 +137,17 @@ class LMCacheEngine:
                 self.fmt = MemoryFormat.KV_T2D
 
         self.lookup_cache = {}
-        # request_id -> [pinned keys]
+        # lookup_id -> [pinned keys]
         self.lookup_pins = defaultdict(list)
 
         InitializeUsageContext(config.to_original_config(), metadata)
         self.stats_monitor = LMCStatsMonitor.GetOrCreate()
 
         self.post_inited = False
+
+        gc.collect()
+        if not config.py_enable_gc:
+            gc.disable()
 
     def post_init(self, **kwargs) -> None:
         if not self.post_inited:
@@ -245,9 +251,6 @@ class LMCacheEngine:
 
         tot_time = offload_time + put_time
 
-        if self.lookup_server is not None:
-            self.lookup_server.batched_insert(keys)
-
         logger.info(
             "Stored %d out of total %d tokens. size: %.4f gb, cost %.4f ms, "
             "throughput: %.4f GB/s; offload_time: %.4f ms, put_time: %.4f ms",
@@ -338,10 +341,6 @@ class LMCacheEngine:
             memory_objs.append(memory_objs_multi_layer)
             tot_token_num += num_tokens
 
-            # Update lookup server
-            if self.lookup_server is not None:
-                self.lookup_server.batched_insert(keys_multi_layer)
-
         if keys:
             # Transpose the keys and memory objects into layer major format
             memory_objs = [list(row) for row in zip(*memory_objs, strict=False)]
@@ -409,14 +408,13 @@ class LMCacheEngine:
 
         ret_mask = torch.zeros_like(tokens, dtype=torch.bool, device="cpu")
 
-        key_mapping: Dict[str, List[CacheEngineKey]] = {}
-        start_mapping: Dict[str, List[int]] = {}
-        end_mapping: Dict[str, List[int]] = {}
+        # location -> [(CacheEngineKey, start, end)]
+        block_mapping: Dict[str, List[Tuple[CacheEngineKey, int, int]]] = defaultdict(
+            list
+        )
+        # [(CacheEngineKey, MemoryObj, start, end)]
+        reordered_chunks: List[Tuple[CacheEngineKey, MemoryObj, int, int]] = []
 
-        reordered_keys = []
-        reordered_memory_objs = []
-        reordered_starts = []
-        reordered_ends = []
         for start, end, key in self.token_database.process_tokens(
             tokens=tokens, mask=mask
         ):
@@ -440,10 +438,7 @@ class LMCacheEngine:
                         )
                         memory_obj = future_memory_obj.result()
                         if memory_obj:
-                            reordered_keys.append(key)
-                            reordered_memory_objs.append(memory_obj)
-                            reordered_starts.append(start)
-                            reordered_ends.append(end)
+                            reordered_chunks.append((key, memory_obj, start, end))
                             ret_mask[start:end] = True
                         else:
                             # NOTE: break for P2P retrieve KV because of no required
@@ -457,40 +452,53 @@ class LMCacheEngine:
                 # object is already pinned in the storage backend.
                 ret_mask[start:end] = True
 
-                if location not in key_mapping:
-                    key_mapping[location] = [key]
-                    start_mapping[location] = [start]
-                    end_mapping[location] = [end]
-                    continue
-
             assert location is not None
 
-            key_mapping[location].append(key)
-            start_mapping[location].append(start)
-            end_mapping[location].append(end)
+            block_mapping[location].append((key, start, end))
 
         # TODO(Jiayi): We can parallelize the retrieval from
         # different storage backends.
-        for location, keys in key_mapping.items():
+        last_failed_block_start = None
+        for location, blocks in block_mapping.items():
+            keys = [key for key, _, _ in blocks]
             memory_objs = self.storage_manager.batched_get(
                 keys=keys,
                 location=location,
             )
-            reordered_memory_objs.extend(memory_objs)
-            reordered_keys.extend(keys)
-            reordered_starts.extend(start_mapping[location])
-            reordered_ends.extend(end_mapping[location])
+            for (key, start, end), memory_obj in zip(blocks, memory_objs, strict=False):
+                if memory_obj is None:
+                    logger.warn(
+                        "The cache block is in the storage, but it can't be retrieved"
+                    )
+                    if (
+                        last_failed_block_start is None
+                        or last_failed_block_start < start
+                    ):
+                        last_failed_block_start = start
+                    break
+                reordered_chunks.append((key, memory_obj, start, end))
+
+        if last_failed_block_start is not None:
+            ret_mask[last_failed_block_start:] = False
+
+            reordered_chunks = [
+                (key, memory_obj, start, end)
+                for key, memory_obj, start, end in reordered_chunks
+                if end < last_failed_block_start
+            ]
 
         # NOTE(Jiayi): memory_obj doesn't have to be a pinned
         # cpu tensor for the sake of performance.
         # For example, disk->gpu is faster than disk->cpu->gpu.
         # RDMA is another example.
-        self.gpu_connector.batched_to_gpu(
-            reordered_memory_objs, reordered_starts, reordered_ends, **kwargs
-        )
+        if len(reordered_chunks) > 0:
+            _, memory_objs, starts, ends = zip(*reordered_chunks, strict=False)
+            self.gpu_connector.batched_to_gpu(
+                list(memory_objs), list(starts), list(ends), **kwargs
+            )
 
         # TODO(Jiayi): Remove the following for loop with batched operations
-        for key, memory_obj in zip(reordered_keys, reordered_memory_objs, strict=False):
+        for key, memory_obj, _, _ in reordered_chunks:
             if self.remove_after_retrieve:
                 self.storage_manager.remove(key)
             memory_obj.ref_count_down()
@@ -629,13 +637,12 @@ class LMCacheEngine:
             assert isinstance(key, CacheEngineKey)
             self.storage_manager.prefetch(key)
 
-    # TODO(Jiayi): Currently, search_range is only used for testing.
     @_lmcache_nvtx_annotate
     def lookup(
         self,
         tokens: Union[torch.Tensor, List[int]],
         search_range: Optional[List[str]] = None,
-        request_id: Optional[str] = None,
+        lookup_id: Optional[str] = None,
         pin: bool = False,
     ) -> int:
         """
@@ -648,7 +655,8 @@ class LMCacheEngine:
         ["LocalCPUBackend", "LocalDiskBackend"] for now.
         If None, search in all backends.
 
-        :param str request_id: The request ID to associate with the lookup
+        :param str lookup_id: The lookup ID to
+        associate with the lookup
 
         :param bool pin: If True, pin the KV cache in the storage.
 
@@ -659,7 +667,7 @@ class LMCacheEngine:
             prev_end = 0
 
             if pin:
-                assert request_id is not None, "request_id is required when pin is True"
+                assert lookup_id is not None, "lookup_id is required when pin is True"
 
             # secondary lookup on p2p (via lookup_server) if enabled
             search_p2p = self.enable_p2p and (
@@ -686,14 +694,14 @@ class LMCacheEngine:
                                 found = True
                     if found:
                         if pin:
-                            self.lookup_pins[request_id].extend(key_all_layers)
+                            self.lookup_pins[lookup_id].extend(key_all_layers)
                         prev_end = end
                         continue
                     return prev_end
                 else:
                     if self.storage_manager.contains(key, search_range, pin):
                         if pin:
-                            self.lookup_pins[request_id].append(key)
+                            self.lookup_pins[lookup_id].append(key)
                         prev_end = end
                         continue
 
@@ -728,7 +736,7 @@ class LMCacheEngine:
         num_tokens = self.lookup(
             tokens,
             search_range=old_position,
-            request_id=event_id,
+            lookup_id=event_id,
             pin=True,
         )
 
@@ -792,7 +800,7 @@ class LMCacheEngine:
         num_tokens = self.lookup(
             tokens,
             search_range=[location],
-            request_id=event_id,
+            lookup_id=event_id,
             pin=True,
         )
 
@@ -823,11 +831,11 @@ class LMCacheEngine:
         return num_tokens
 
     @_lmcache_nvtx_annotate
-    def lookup_unpin(self, request_ids: list[str]) -> None:
-        for request_id in request_ids:
-            if request_id in self.lookup_pins:
-                self.storage_manager.batched_unpin(self.lookup_pins[request_id])
-                del self.lookup_pins[request_id]
+    def lookup_unpin(self, lookup_ids: list[str]) -> None:
+        for lookup_id in lookup_ids:
+            if lookup_id in self.lookup_pins:
+                self.storage_manager.batched_unpin(self.lookup_pins[lookup_id])
+                del self.lookup_pins[lookup_id]
 
     @_lmcache_nvtx_annotate
     def clear(
