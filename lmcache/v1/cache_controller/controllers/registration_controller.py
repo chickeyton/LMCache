@@ -82,8 +82,8 @@ class RegistrationController:
         instance_id = self.instance_mapping.get(ip)
         if instance_id is None:
             logger.warning(f"Instance not registered for IP {ip}")
-            return QueryInstRetMsg(instance_id=None)
-        return QueryInstRetMsg(instance_id=instance_id)
+            return QueryInstRetMsg(event_id=msg.event_id, instance_id=None)
+        return QueryInstRetMsg(event_id=msg.event_id, instance_id=instance_id)
 
     async def register(self, msg: RegisterMsg) -> None:
         """
