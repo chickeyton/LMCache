@@ -18,7 +18,7 @@ from tests.v1.utils import generate_tokens
 
 @pytest.mark.parametrize("instance_id", ["test1", "test2"])
 @pytest.mark.parametrize("worker_id", [0, 1])
-@pytest.mark.parametrize("location", ["cpu", "disk"])
+@pytest.mark.parametrize("location", ["LocalCPUBackend", "LocalDiskBackend"])
 @pytest.mark.asyncio
 async def test_kv_chunk_lifecycle(instance_id, worker_id, location):
     kv_controller = KVController()
@@ -57,7 +57,7 @@ async def test_kv_chunk_lifecycle(instance_id, worker_id, location):
         assert key not in kv_controller.kv_pool
 
         # Test deregister on empty pool
-        kv_controller.deregister(instance_id, worker_id)
+        await kv_controller.deregister(instance_id, worker_id)
         assert len(kv_controller.kv_pool) == 0
         break  # Only test with first key
 
@@ -76,9 +76,9 @@ async def test_kv_chunk_multiple_instances():
     ):
         # Add KV chunks for multiple instances
         instances = [
-            ("instance1", 0, "cpu"),
-            ("instance1", 1, "disk"),
-            ("instance2", 0, "cpu"),
+            ("instance1", 0, "LocalCPUBackend"),
+            ("instance1", 1, "LocalDiskBackend"),
+            ("instance2", 0, "LocalCPUBackend"),
         ]
 
         for instance_id, worker_id, location in instances:
@@ -93,7 +93,7 @@ async def test_kv_chunk_multiple_instances():
 
         # Remove one instance KV chunk
         evict_msg = KVEvictMsg(
-            instance_id="instance1", worker_id=0, key=key, location="cpu"
+            instance_id="instance1", worker_id=0, key=key, location="LocalCPUBackend"
         )
         await kv_controller.evict(evict_msg)
 
@@ -123,7 +123,10 @@ async def test_lookup_functionality(token_length):
     ):
         assert isinstance(key, int)
         admit_msg = KVAdmitMsg(
-            instance_id="test_instance", worker_id=0, key=key, location="cpu"
+            instance_id="test_instance",
+            worker_id=0,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.admit(admit_msg)
 
@@ -134,7 +137,7 @@ async def test_lookup_functionality(token_length):
     # Verify result
     assert "test_instance" in result.layout_info
     location, end = result.layout_info["test_instance"]
-    assert location == "cpu"
+    assert location == "LocalCPUBackend"
     assert end == token_length
 
 
@@ -153,7 +156,10 @@ async def test_full_lookup_functionality(token_length):
         tokens, make_key=False
     ):
         admit_msg = KVAdmitMsg(
-            instance_id="test_instance", worker_id=0, key=key, location="cpu"
+            instance_id="test_instance",
+            worker_id=0,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.admit(admit_msg)
 
@@ -186,7 +192,10 @@ async def test_lookup_edge_cases():
             break
         assert isinstance(key, int)
         admit_msg = KVAdmitMsg(
-            instance_id="test_instance", worker_id=0, key=key, location="cpu"
+            instance_id="test_instance",
+            worker_id=0,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.admit(admit_msg)
         chunk_count += 1
@@ -229,7 +238,10 @@ async def test_full_lookup_edge_cases():
             break
         assert isinstance(key, int)
         admit_msg = KVAdmitMsg(
-            instance_id="test_instance", worker_id=0, key=key, location="cpu"
+            instance_id="test_instance",
+            worker_id=0,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.admit(admit_msg)
         chunk_count += 1
@@ -277,10 +289,10 @@ async def test_edge_cases_and_errors():
 
         # Test duplicate admit for same key
         admit_msg1 = KVAdmitMsg(
-            instance_id="instance1", worker_id=0, key=key, location="cpu"
+            instance_id="instance1", worker_id=0, key=key, location="LocalCPUBackend"
         )
         admit_msg2 = KVAdmitMsg(
-            instance_id="instance2", worker_id=0, key=key, location="disk"
+            instance_id="instance2", worker_id=0, key=key, location="LocalDiskBackend"
         )
 
         await kv_controller.admit(admit_msg1)
@@ -292,7 +304,7 @@ async def test_edge_cases_and_errors():
 
         # Test evict non-existent key
         non_existent_msg = KVEvictMsg(
-            instance_id="nonexistent", worker_id=0, key=-1, location="cpu"
+            instance_id="nonexistent", worker_id=0, key=-1, location="LocalCPUBackend"
         )
         await kv_controller.evict(non_existent_msg)
 
@@ -325,7 +337,10 @@ async def test_concurrent_operations():
     async def add_kv_chunk(i):
         key = keys[i]
         admit_msg = KVAdmitMsg(
-            instance_id=f"instance_{i}", worker_id=i, key=key, location="cpu"
+            instance_id=f"instance_{i}",
+            worker_id=i,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.admit(admit_msg)
         return key
@@ -342,7 +357,10 @@ async def test_concurrent_operations():
     async def remove_kv_chunk(i):
         key = keys[i]
         evict_msg = KVEvictMsg(
-            instance_id=f"instance_{i}", worker_id=i, key=key, location="cpu"
+            instance_id=f"instance_{i}",
+            worker_id=i,
+            key=key,
+            location="LocalCPUBackend",
         )
         await kv_controller.evict(evict_msg)
 
