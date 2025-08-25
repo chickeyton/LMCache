@@ -309,7 +309,7 @@ async def test_edge_cases_and_errors():
         await kv_controller.evict(non_existent_msg)
 
         # Test deregister non-existent instance
-        kv_controller.deregister("nonexistent", 0)
+        await kv_controller.deregister("nonexistent", 0)
         break  # Only test with first key
 
 
