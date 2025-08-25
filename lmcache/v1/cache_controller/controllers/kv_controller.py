@@ -183,12 +183,16 @@ class KVController:
             for instance in matched_pool:
                 matched_instance = instance.instance_id
                 matched_location = instance.location
+                cache_list = layout_info.get(matched_instance)
                 if last_end == -1:
-                    layout_info[matched_instance] = [(matched_location, end)]
+                    if cache_list is None or cache_list[0][0] != "LocalCpuBackend":
+                        layout_info[matched_instance] = [(matched_location, end)]
                 else:
-                    cache_list = layout_info.get(matched_instance, None)
-                    if cache_list is not None and last_end == cache_list[-1][1]:
-                        cache_list.append((matched_location, end))
+                    if cache_list is not None:
+                        if last_end == cache_list[-1][1]:
+                            cache_list.append((matched_location, end))
+                        elif end == cache_list[-1][1] and cache_list[-1][0] != "LocalCpuBackend":
+                            cache_list[-1] = (matched_location, end)
             last_end = end
         return FullLookupRetMsg(
             matched_info=list(layout_info.items()),

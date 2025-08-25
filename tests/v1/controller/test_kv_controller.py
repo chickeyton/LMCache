@@ -1,5 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard
+import asyncio
 import math
 
 # Third Party
@@ -237,6 +238,14 @@ async def test_full_lookup_edge_cases():
         if chunk_count >= 3:
             break
         assert isinstance(key, int)
+        # multiple locations
+        admit_msg = KVAdmitMsg(
+            instance_id="test_instance",
+            worker_id=0,
+            key=key,
+            location="LocalDiskBackend",
+        )
+        await kv_controller.admit(admit_msg)
         admit_msg = KVAdmitMsg(
             instance_id="test_instance",
             worker_id=0,
@@ -255,6 +264,8 @@ async def test_full_lookup_edge_cases():
     assert instance_id == "test_instance"
     assert len(cache_list) == 3
     assert full_result.chunk_size == 256
+    for cache_chunk in cache_list: # make sure CPU is always prioritized
+        assert cache_chunk[0] == "LocalCPUBackend"
 
     # Test no match
     empty_tokens = []
@@ -317,9 +328,6 @@ async def test_edge_cases_and_errors():
 async def test_concurrent_operations():
     kv_controller = KVController()
     """Test concurrent operations"""
-    # Standard
-    import asyncio
-
     # Generate tokens for multiple keys
     tokens = generate_tokens(2560, "cpu")  # 10 chunks * 256 tokens
 
