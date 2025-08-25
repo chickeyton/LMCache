@@ -60,7 +60,7 @@ def async_loop():
 
 @pytest.fixture
 def memory_allocator():
-    return AdHocMemoryAllocator(device="cpu")
+    return AdHocMemoryAllocator(device="cuda")
 
 
 @pytest.fixture
