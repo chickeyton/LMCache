@@ -185,13 +185,13 @@ class KVController:
                 matched_location = instance.location
                 cache_list = layout_info.get(matched_instance)
                 if last_end == -1:
-                    if cache_list is None or cache_list[0][0] != "LocalCpuBackend":
+                    if cache_list is None or cache_list[0][0] != "LocalCPUBackend":
                         layout_info[matched_instance] = [(matched_location, end)]
                 else:
                     if cache_list is not None:
                         if last_end == cache_list[-1][1]:
                             cache_list.append((matched_location, end))
-                        elif end == cache_list[-1][1] and cache_list[-1][0] != "LocalCpuBackend":
+                        elif end == cache_list[-1][1] and cache_list[-1][0] != "LocalCPUBackend":
                             cache_list[-1] = (matched_location, end)
             last_end = end
         return FullLookupRetMsg(
