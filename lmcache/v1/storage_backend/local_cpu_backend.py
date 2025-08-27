@@ -272,7 +272,7 @@ class LocalCPUBackend(StorageBackendInterface):
                 evict_keys_count += 1
                 self.batched_remove(evict_keys, force=False)
 
-                on_evict_keys.extends(evict_keys)
+                on_evict_keys.extend(evict_keys)
 
                 memory_obj = self.memory_allocator.allocate(shape, dtype, fmt)
                 logger.debug(f"Evicting {len(evict_keys)} chunk from cpu memory")
@@ -340,7 +340,7 @@ class LocalCPUBackend(StorageBackendInterface):
                 evict_keys_count += 1
                 for evict_key in evict_keys:
                     evict_key_all_layer = evict_key.split_layers(batch_size)
-                    on_evict_keys.extends(evict_key_all_layer)
+                    on_evict_keys.extend(evict_key_all_layer)
 
                     # TODO(Jiayi): batched allocate is not supported through
                     # `batched_remove`. Therefore, features like usage tracking
