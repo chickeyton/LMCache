@@ -252,7 +252,7 @@ class LocalCPUBackend(StorageBackendInterface):
         assert isinstance(self.memory_allocator, MixedMemoryAllocator) or isinstance(
             self.memory_allocator, NixlCPUMemoryAllocator
         )
-
+        on_evict_keys = []
         evict_keys_count = 0
         with self.cpu_lock:
             while True:
@@ -272,8 +272,7 @@ class LocalCPUBackend(StorageBackendInterface):
                 evict_keys_count += 1
                 self.batched_remove(evict_keys, force=False)
 
-                # TODO(Jiayi): Move this inside `batched_remove`
-                super()._on_evict(evict_keys)
+                on_evict_keys.extends(evict_keys)
 
                 memory_obj = self.memory_allocator.allocate(shape, dtype, fmt)
                 logger.debug(f"Evicting {len(evict_keys)} chunk from cpu memory")
@@ -281,6 +280,7 @@ class LocalCPUBackend(StorageBackendInterface):
                     break
 
         self.stats_monitor.update_local_cpu_evict_metrics(evict_keys_count)
+        super()._on_evict(on_evict_keys)
         return memory_obj
 
     @_lmcache_nvtx_annotate
@@ -317,7 +317,7 @@ class LocalCPUBackend(StorageBackendInterface):
         assert isinstance(self.memory_allocator, MixedMemoryAllocator) or isinstance(
             self.memory_allocator, NixlCPUMemoryAllocator
         )
-
+        on_evict_keys = []
         evict_keys_count = 0
         with self.cpu_lock:
             while True:
@@ -340,6 +340,7 @@ class LocalCPUBackend(StorageBackendInterface):
                 evict_keys_count += 1
                 for evict_key in evict_keys:
                     evict_key_all_layer = evict_key.split_layers(batch_size)
+                    on_evict_keys.extends(evict_key_all_layer)
 
                     # TODO(Jiayi): batched allocate is not supported through
                     # `batched_remove`. Therefore, features like usage tracking
@@ -352,8 +353,6 @@ class LocalCPUBackend(StorageBackendInterface):
                     self.memory_allocator.batched_free(old_mem_objs)
                     self.hot_cache.pop(evict_key, None)
 
-                    super()._on_evict(evict_key_all_layer)
-
                     logger.debug(f"Evicting {len(old_mem_objs)} chunks from cpu memory")
 
                 memory_objs = self.memory_allocator.batched_allocate(
@@ -364,6 +363,9 @@ class LocalCPUBackend(StorageBackendInterface):
                     break
 
         self.stats_monitor.update_local_cpu_evict_metrics(evict_keys_count)
+
+        super()._on_evict(on_evict_keys)
+
         return memory_objs
 
     def get_keys(self) -> List[CacheEngineKey]:
