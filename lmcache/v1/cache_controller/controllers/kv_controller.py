@@ -171,7 +171,7 @@ class KVController:
 
     async def full_lookup(self, msg: FullLookupMsg) -> FullLookupRetMsg:
         tokens = msg.tokens
-        layout_info = {}
+        layout_info: dict[str, list[tuple[str, int]]] = {}
         last_end = -1
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
@@ -191,7 +191,10 @@ class KVController:
                     if cache_list is not None:
                         if last_end == cache_list[-1][1]:
                             cache_list.append((matched_location, end))
-                        elif end == cache_list[-1][1] and cache_list[-1][0] != "LocalCPUBackend":
+                        elif (
+                            end == cache_list[-1][1]
+                            and cache_list[-1][0] != "LocalCPUBackend"
+                        ):
                             cache_list[-1] = (matched_location, end)
             last_end = end
         return FullLookupRetMsg(

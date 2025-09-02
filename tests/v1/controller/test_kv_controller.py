@@ -264,7 +264,7 @@ async def test_full_lookup_edge_cases():
     assert instance_id == "test_instance"
     assert len(cache_list) == 3
     assert full_result.chunk_size == 256
-    for cache_chunk in cache_list: # make sure CPU is always prioritized
+    for cache_chunk in cache_list:  # make sure CPU is always prioritized
         assert cache_chunk[0] == "LocalCPUBackend"
 
     # Test no match
