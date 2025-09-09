@@ -12,6 +12,7 @@ import torch
 
 # First Party
 from lmcache.logging import init_logger
+from lmcache.observability import LMCStatsMonitor
 from lmcache.utils import CacheEngineKey
 from lmcache.v1.config import LMCacheEngineConfig
 from lmcache.v1.distributed_server.abstract_server import (  # noqa: E501
@@ -54,6 +55,7 @@ class NaiveDistributedServer(DistributedServerInterface):
     ):
         self.storage_manager = storage_manager
         self.lookup_server = lookup_server
+        self.stats_monitor = LMCStatsMonitor.GetOrCreate()
 
         self.url = config.distributed_url
         assert self.url is not None
@@ -341,6 +343,7 @@ class NaiveDistributedServer(DistributedServerInterface):
                     case ClientCommand.GET:
                         t0 = time.perf_counter()
 
+                        backend_name = self.storage_manager.contains(meta.key)
                         memory_obj = await self.handle_get(meta.key)
 
                         # TODO(Jiayi): Refactor the following code to `handle_get`
@@ -365,6 +368,16 @@ class NaiveDistributedServer(DistributedServerInterface):
                             memory_obj.ref_count_down()
 
                             t3 = time.perf_counter()
+
+                            if backend_name == "LocalDiskBackend":
+                                self.stats_monitor.update_p2p_transfer_time_from_disk(
+                                    t3 - t0
+                                )
+                            elif backend_name == "LocalCPUBackend":
+                                self.stats_monitor.update_p2p_transfer_time_from_cpu(
+                                    t3 - t0
+                                )
+
                             logger.debug(
                                 f"Time to get data: {t1 - t0}, "
                                 f"time to send meta: {t2 - t1}, "

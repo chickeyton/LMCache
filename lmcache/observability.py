@@ -66,6 +66,10 @@ class LMCacheStats:
     retrieve_speed: List[float]  # Tokens per second
     store_speed: List[float]  # Tokens per second
 
+    # p2p transfer
+    avg_p2p_transfer_time_from_disk: float
+    avg_p2p_transfer_time_from_cpu: float
+
 
 @dataclass
 class LookupRequestStats:
@@ -145,6 +149,12 @@ class LMCStatsMonitor:
         self.interval_local_cpu_evict_count = 0
         self.interval_local_cpu_evict_keys_count = 0
         self.interval_local_cpu_evict_failed_count = 0
+
+        self.interval_p2p_transfer_time_from_disk: List[float] = []
+        self.interval_p2p_transfer_time_from_cpu: List[float] = []
+
+        self.avg_p2p_transfer_time_from_disk: float = -1
+        self.avg_p2p_transfer_time_from_cpu: float = -1
 
         self.local_cache_usage_bytes = 0
         self.remote_cache_usage_bytes = 0
@@ -296,6 +306,14 @@ class LMCStatsMonitor:
     def update_interval_vllm_hit_tokens(self, delta: int):
         self.interval_vllm_hit_tokens += delta
 
+    @thread_safe
+    def update_p2p_transfer_time_from_disk(self, time: float):
+        self.interval_p2p_transfer_time_from_disk.append(time)
+
+    @thread_safe
+    def update_p2p_transfer_time_from_cpu(self, time: float):
+        self.interval_p2p_transfer_time_from_cpu.append(time)
+
     def _clear(self):
         """
         Clear all the distribution stats
@@ -327,6 +345,9 @@ class LMCStatsMonitor:
         self.interval_local_cpu_evict_count = 0
         self.interval_local_cpu_evict_keys_count = 0
         self.interval_local_cpu_evict_failed_count = 0
+
+        self.interval_p2p_transfer_time_from_disk.clear()
+        self.interval_p2p_transfer_time_from_cpu.clear()
 
         new_retrieve_requests = {}
         for request_id, retrieve_stats in self.retrieve_requests.items():
@@ -379,6 +400,15 @@ class LMCStatsMonitor:
             [stats.store_speed() for stats in self.store_requests.values()]
         )
 
+        if self.interval_p2p_transfer_time_from_disk:
+            self.avg_p2p_transfer_time_from_disk = sum(
+                self.interval_p2p_transfer_time_from_disk
+            ) / len(self.interval_p2p_transfer_time_from_disk)
+        if self.interval_p2p_transfer_time_from_cpu:
+            self.interval_p2p_transfer_time_from_cpu = sum(
+                self.interval_p2p_transfer_time_from_cpu
+            ) / len(self.interval_p2p_transfer_time_from_cpu)
+
         ret = LMCacheStats(
             interval_retrieve_requests=self.interval_retrieve_requests,
             interval_store_requests=self.interval_store_requests,
@@ -413,6 +443,8 @@ class LMCStatsMonitor:
             retrieve_speed=retrieve_speed,
             store_speed=store_speed,
             interval_vllm_hit_tokens=self.interval_vllm_hit_tokens,
+            avg_p2p_transfer_time_from_disk=self.avg_p2p_transfer_time_from_disk,
+            avg_p2p_transfer_time_from_cpu=self.avg_p2p_transfer_time_from_cpu,
         )
         self._clear()
         return ret
@@ -596,6 +628,20 @@ class PrometheusLogger:
             documentation="The number of pinned memory objects",
             labelnames=labelnames,
             multiprocess_mode="sum",
+        )
+
+        self.gauge_avg_p2p_transfer_time_from_disk = self._gauge_cls(
+            name="lmcache:avg_p2p_transfer_time_from_disk",
+            documentation="Average p2p transfer time from disk (seconds) per chunk",
+            labelnames=labelnames,
+            multiprocess_mode="mostrecent",
+        )
+
+        self.gauge_avg_p2p_transfer_time_from_cpu = self._gauge_cls(
+            name="lmcache:gauge_avg_p2p_transfer_time_from_cpu",
+            documentation="Average p2p transfer time from CPU (seconds) per chunk",
+            labelnames=labelnames,
+            multiprocess_mode="mostrecent",
         )
 
         time_to_retrieve_buckets = [
@@ -887,6 +933,16 @@ class PrometheusLogger:
         self._log_gauge(self.gauge_remote_cache_usage, stats.remote_cache_usage_bytes)
 
         self._log_gauge(self.gauge_local_storage_usage, stats.local_storage_usage_bytes)
+
+        self._log_gauge(
+            self.gauge_avg_p2p_transfer_time_from_disk,
+            stats.avg_p2p_transfer_time_from_disk,
+        )
+
+        self._log_gauge(
+            self.gauge_avg_p2p_transfer_time_from_cpu,
+            stats.avg_p2p_transfer_time_from_cpu,
+        )
 
         self._log_histogram(self.histogram_time_to_retrieve, stats.time_to_retrieve)
 
