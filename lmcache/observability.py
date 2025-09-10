@@ -638,7 +638,7 @@ class PrometheusLogger:
         )
 
         self.gauge_avg_p2p_transfer_time_from_cpu = self._gauge_cls(
-            name="lmcache:gauge_avg_p2p_transfer_time_from_cpu",
+            name="lmcache:avg_p2p_transfer_time_from_cpu",
             documentation="Average p2p transfer time from CPU (seconds) of a chunk",
             labelnames=labelnames,
             multiprocess_mode="mostrecent",
