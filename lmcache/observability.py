@@ -153,8 +153,8 @@ class LMCStatsMonitor:
         self.interval_p2p_transfer_time_from_disk: List[float] = []
         self.interval_p2p_transfer_time_from_cpu: List[float] = []
 
-        self.avg_p2p_transfer_time_from_disk: float = -1
-        self.avg_p2p_transfer_time_from_cpu: float = -1
+        self.avg_p2p_transfer_time_from_disk: float = 0
+        self.avg_p2p_transfer_time_from_cpu: float = 0
 
         self.local_cache_usage_bytes = 0
         self.remote_cache_usage_bytes = 0
