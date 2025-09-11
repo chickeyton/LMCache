@@ -405,7 +405,7 @@ class LMCStatsMonitor:
                 self.interval_p2p_transfer_time_from_disk
             ) / len(self.interval_p2p_transfer_time_from_disk)
         if self.interval_p2p_transfer_time_from_cpu:
-            self.interval_p2p_transfer_time_from_cpu = sum(
+            self.avg_p2p_transfer_time_from_cpu = sum(
                 self.interval_p2p_transfer_time_from_cpu
             ) / len(self.interval_p2p_transfer_time_from_cpu)
 
