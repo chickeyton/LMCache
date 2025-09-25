@@ -178,7 +178,6 @@ class KVController:
         for start, end, key in self.token_database.process_tokens(
             tokens, make_key=False
         ):
-            key = str(key)
             matched_pool = self.kv_pool.get(key, None)
             if matched_pool is None:
                 break
