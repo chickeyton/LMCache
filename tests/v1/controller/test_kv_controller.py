@@ -41,9 +41,9 @@ async def test_kv_chunk_lifecycle(instance_id, worker_id, location):
         await kv_controller.admit(admit_msg)
 
         # Verify KV chunk added
-        assert str(key) in kv_controller.kv_pool
-        assert len(kv_controller.kv_pool[str(key)]) == 1
-        metadata = kv_controller.kv_pool[str(key)][0]
+        assert key in kv_controller.kv_pool
+        assert len(kv_controller.kv_pool[key]) == 1
+        metadata = kv_controller.kv_pool[key][0]
         assert metadata.instance_id == instance_id
         assert metadata.worker_id == worker_id
         assert metadata.location == location
@@ -89,8 +89,8 @@ async def test_kv_chunk_multiple_instances():
             await kv_controller.admit(admit_msg)
 
         # Verify all KV chunks added
-        assert str(key) in kv_controller.kv_pool
-        assert len(kv_controller.kv_pool[str(key)]) == 3
+        assert key in kv_controller.kv_pool
+        assert len(kv_controller.kv_pool[key]) == 3
 
         # Remove one instance KV chunk
         evict_msg = KVEvictMsg(
@@ -99,15 +99,15 @@ async def test_kv_chunk_multiple_instances():
         await kv_controller.evict(evict_msg)
 
         # Verify only 2 KV chunks remain
-        assert len(kv_controller.kv_pool[str(key)]) == 2
+        assert len(kv_controller.kv_pool[key]) == 2
 
         # Deregister all instance1 workers
         await kv_controller.deregister("instance1", 0)
         await kv_controller.deregister("instance1", 1)
 
         # Verify only instance2 KV chunk remains
-        assert len(kv_controller.kv_pool[str(key)]) == 1
-        assert kv_controller.kv_pool[str(key)][0].instance_id == "instance2"
+        assert len(kv_controller.kv_pool[key]) == 1
+        assert kv_controller.kv_pool[key][0].instance_id == "instance2"
         break  # Only test with first key
 
 
@@ -310,8 +310,8 @@ async def test_edge_cases_and_errors():
         await kv_controller.admit(admit_msg2)
 
         # Verify both KV chunks exist
-        assert str(key) in kv_controller.kv_pool
-        assert len(kv_controller.kv_pool[str(key)]) == 2
+        assert key in kv_controller.kv_pool
+        assert len(kv_controller.kv_pool[key]) == 2
 
         # Test evict non-existent key
         non_existent_msg = KVEvictMsg(
@@ -359,7 +359,7 @@ async def test_concurrent_operations():
 
     # Verify all KV chunks added
     for key in added_keys:
-        assert str(key) in kv_controller.kv_pool
+        assert key in kv_controller.kv_pool
 
     # Concurrently remove KV chunks
     async def remove_kv_chunk(i):
