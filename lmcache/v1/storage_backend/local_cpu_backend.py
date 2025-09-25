@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: Apache-2.0
 # Standard
 from concurrent.futures import Future
-from typing import TYPE_CHECKING, List, Optional, Sequence
+from typing import TYPE_CHECKING, Any, List, Optional, Sequence
 import threading
 import time
 
@@ -9,21 +9,22 @@ import time
 import torch
 
 # First Party
+from lmcache.config import LMCacheEngineMetadata
 from lmcache.logging import init_logger
 from lmcache.observability import LMCStatsMonitor, PrometheusLogger
 from lmcache.utils import CacheEngineKey, _lmcache_nvtx_annotate
 from lmcache.v1.cache_controller.message import KVAdmitMsg, KVEvictMsg
 from lmcache.v1.config import LMCacheEngineConfig
-from lmcache.v1.lookup_server import LookupServerInterface
 from lmcache.v1.memory_management import (
     MemoryAllocatorInterface,
     MemoryFormat,
     MemoryObj,
     MixedMemoryAllocator,
-    NixlCPUMemoryAllocator,
+    PagedCpuGpuMemoryAllocator,
 )
 from lmcache.v1.storage_backend.abstract_backend import AllocatorBackendInterface
 from lmcache.v1.storage_backend.cache_policy import get_cache_policy
+from lmcache.v1.system_detection import NUMADetector
 
 if TYPE_CHECKING:
     # First Party
@@ -42,21 +43,32 @@ class LocalCPUBackend(AllocatorBackendInterface):
     def __init__(
         self,
         config: LMCacheEngineConfig,
-        memory_allocator: MemoryAllocatorInterface,
-        lookup_server: Optional[LookupServerInterface] = None,
+        metadata: Optional[LMCacheEngineMetadata] = None,
+        dst_device: str = "cuda",
         lmcache_worker: Optional["LMCacheWorker"] = None,
+        memory_allocator: Optional[MemoryAllocatorInterface] = None,
     ):
+        if torch.cuda.is_available():
+            super().__init__(dst_device)
+        else:
+            super().__init__("cpu")
+
         self.cache_policy = get_cache_policy(config.cache_policy)
         self.hot_cache = self.cache_policy.init_mutable_mapping()
 
         self.use_hot = config.local_cpu
-        self.lookup_server = lookup_server
-        self.memory_allocator = memory_allocator
+        # NOTE: we keep the memory allocator argument for temporary
+        # test compatibility
+        # TODO: fix the tests to get rid the memory allocator
+        assert metadata is not None or memory_allocator is not None
+        self.memory_allocator = (
+            self.initialize_allocator(config, metadata)  # type: ignore
+            if memory_allocator is None
+            else memory_allocator
+        )
         self.lmcache_worker = lmcache_worker
         self.instance_id = config.lmcache_instance_id
         self.cpu_lock = threading.Lock()
-
-        self.stream = torch.cuda.Stream()
 
         self.stats_monitor = LMCStatsMonitor.GetOrCreate()
 
@@ -135,7 +147,7 @@ class LocalCPUBackend(AllocatorBackendInterface):
         self,
         keys: Sequence[CacheEngineKey],
         memory_objs: List[MemoryObj],
-        transfer_spec=None,
+        transfer_spec: Any = None,
     ) -> None:
         """
         Synchronously put the MemoryObjs into the local cpu backend.
@@ -146,14 +158,6 @@ class LocalCPUBackend(AllocatorBackendInterface):
         # TODO(Jiayi): optimize this with batching
         for key, memory_obj in zip(keys, memory_objs, strict=False):
             self.submit_put_task(key, memory_obj)
-
-    # NOTE (Jiayi): prefetch might be deprecated in the future.
-    # Should be replaced by `move`.
-    def submit_prefetch_task(
-        self,
-        key: CacheEngineKey,
-    ) -> bool:
-        return False
 
     def get_blocking(
         self,
@@ -169,21 +173,38 @@ class LocalCPUBackend(AllocatorBackendInterface):
             memory_obj.ref_count_up()
             return memory_obj
 
-    def get_non_blocking(
+    async def batched_get_non_blocking(
         self,
-        key: CacheEngineKey,
-    ) -> Optional[Future]:
-        """
-        Return the dummy future object.
-        """
+        lookup_id: str,
+        keys: list[CacheEngineKey],
+        transfer_spec: Any = None,
+    ) -> list[MemoryObj]:
+        mem_objs = []
         with self.cpu_lock:
-            if key not in self.hot_cache:
-                return None
-            memory_obj = self.hot_cache[key]
-            memory_obj.ref_count_up()
-            f: Future = Future()
-            f.set_result(memory_obj)
-            return f
+            for key in keys:
+                mem_obj = self.hot_cache[key]
+                mem_obj.ref_count_up()
+                mem_objs.append(mem_obj)
+        return mem_objs
+
+    async def batched_async_contains(
+        self,
+        lookup_id: str,
+        keys: List[CacheEngineKey],
+        pin: bool = False,
+    ) -> int:
+        # NOTE(Jiayi): Only prefix chunks are counted.
+        num_hit_chunks = 0
+        with self.cpu_lock:
+            for key in keys:
+                if key not in self.hot_cache:
+                    return num_hit_chunks
+                if pin:
+                    self.hot_cache[key].pin()
+                    # vllm lookup sets pin to True
+                    self.keys_in_request.append(key)
+                num_hit_chunks += 1
+        return num_hit_chunks
 
     def pin(self, key: CacheEngineKey) -> bool:
         with self.cpu_lock:
@@ -225,6 +246,60 @@ class LocalCPUBackend(AllocatorBackendInterface):
         # other backends might still (temporarily) hold the memory object.
         return True
 
+    def initialize_allocator(
+        self,
+        config: LMCacheEngineConfig,
+        metadata: Optional[LMCacheEngineMetadata] = None,
+    ) -> MemoryAllocatorInterface:
+        cpu_size = config.max_local_cpu_size
+
+        if metadata is not None:
+            # save_only_first_rank only works when use mla
+            save_only_first_rank = (
+                config.get_extra_config_value("save_only_first_rank", metadata.use_mla)
+                and metadata.use_mla
+            )
+
+            if save_only_first_rank and metadata.is_first_rank():
+                # Only the first rank will save the cache,
+                # so we need to set it lager than other ranks
+                cpu_size = (
+                    config.extra_config.get("first_rank_max_local_cpu_size", cpu_size)
+                    if config.extra_config
+                    else cpu_size
+                )
+
+        # Detect the numa mapping
+        numa_mapping = NUMADetector.get_numa_mapping(config)
+        logger.info(f"NUMA mapping {numa_mapping}")
+
+        if config.enable_p2p:
+            assert metadata is not None
+            meta_shape = torch.Size(metadata.kv_shape)
+            # TODO(Jiayi): remove this hardcode
+            new_shape = torch.Size(
+                [
+                    meta_shape[1],
+                    meta_shape[0],
+                    meta_shape[2],
+                    meta_shape[3] * meta_shape[4],
+                ]
+            )
+            paged_mem_allocator = PagedCpuGpuMemoryAllocator()
+            paged_mem_allocator.init_cpu_memory_allocator(
+                int(cpu_size * 1024**3),
+                shape=new_shape,
+                dtype=metadata.kv_dtype,
+                fmt=MemoryFormat.KV_2LTD,  # TODO: remove this hardcode
+                numa_mapping=numa_mapping,
+            )
+            return paged_mem_allocator
+        else:
+            return MixedMemoryAllocator(
+                int(cpu_size * 1024**3),
+                numa_mapping=numa_mapping,
+            )
+
     @_lmcache_nvtx_annotate
     def allocate(
         self,
@@ -256,10 +331,6 @@ class LocalCPUBackend(AllocatorBackendInterface):
         if memory_obj is not None or not eviction:
             return memory_obj
 
-        assert isinstance(self.memory_allocator, MixedMemoryAllocator) or isinstance(
-            self.memory_allocator, NixlCPUMemoryAllocator
-        )
-
         evict_keys_count = 0
         num_attempts = 0
         while True:
@@ -269,6 +340,7 @@ class LocalCPUBackend(AllocatorBackendInterface):
                 # TODO(Jiayi): optimize `num_candidates` with estimation.
                 # Accurate estimation is hard due to fragmentation
                 num_candidates = 1
+                evict_keys = None
                 with self.cpu_lock:
                     evict_keys = self.cache_policy.get_evict_candidates(
                         self.hot_cache, num_candidates=num_candidates
@@ -291,9 +363,10 @@ class LocalCPUBackend(AllocatorBackendInterface):
             if wait_other_requests:
                 if not busy_loop:
                     logger.debug(
-                        "Not busy looping becausewe are not immediately able to evict"
+                        "Not busy looping because we are not immediately able to evict"
                     )
                     break
+
                 # TODO: make time_to_wait a config
                 time_to_wait = 0.1
                 logger.warning(
@@ -354,9 +427,7 @@ class LocalCPUBackend(AllocatorBackendInterface):
         if memory_objs is not None or not eviction:
             return memory_objs
 
-        assert isinstance(self.memory_allocator, MixedMemoryAllocator) or isinstance(
-            self.memory_allocator, NixlCPUMemoryAllocator
-        )
+        assert isinstance(self.memory_allocator, MixedMemoryAllocator)
 
         evict_keys_count = 0
         num_attempts = 0
@@ -366,6 +437,7 @@ class LocalCPUBackend(AllocatorBackendInterface):
                 # TODO(Jiayi): optimize `num_candidates` with estimation.
                 # Accurate estimation is hard due to fragmentation
                 num_candidates = 1
+                evict_keys = None
                 with self.cpu_lock:
                     evict_keys = self.cache_policy.get_evict_candidates(
                         self.hot_cache, num_candidates=num_candidates
@@ -392,9 +464,6 @@ class LocalCPUBackend(AllocatorBackendInterface):
 
                             self.memory_allocator.batched_free(old_mem_objs)
 
-                            if self.lookup_server is not None:
-                                self.lookup_server.batched_remove(evict_key_all_layer)
-
                             logger.debug(
                                 f"Evicting {len(old_mem_objs)} chunks from cpu memory"
                             )
@@ -406,9 +475,10 @@ class LocalCPUBackend(AllocatorBackendInterface):
             if wait_other_requests:
                 if not busy_loop:
                     logger.debug(
-                        "Not busy looping becausewe are not immediately able to evict"
+                        "Not busy looping because we are not immediately able to evict"
                     )
                     break
+
                 # TODO: make time_to_wait a config
                 time_to_wait = 0.1
                 logger.warning(
@@ -461,10 +531,14 @@ class LocalCPUBackend(AllocatorBackendInterface):
         # `num_cleared_token` and remove the keys in an atomic way.
         self.batched_remove(clear_keys)
 
-        if self.lookup_server is not None:
-            self.lookup_server.batched_remove(clear_keys)
-
         return num_cleared_tokens
 
+    def get_allocator_backend(self):
+        return self
+
+    def get_memory_allocator(self):
+        return self.memory_allocator
+
     def close(self) -> None:
+        self.memory_allocator.close()
         self.clear()
